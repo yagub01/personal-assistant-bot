@@ -59,9 +59,13 @@ function tz_() {
   return Session.getScriptTimeZone();
 }
 
-/** Formats a Date as ISO 8601 with the local offset, e.g. 2026-11-05T13:00:00-05:00. */
+/**
+ * Formats a Date as local wall-clock time without a UTC offset, e.g. 2026-11-05T13:00:00.
+ * Claude sees and writes times in this form; parseWhen_ reads them in the script time zone, so a
+ * date on the other side of a daylight-saving change never picks up the wrong offset.
+ */
 function isoLocal_(date) {
-  return Utilities.formatDate(date, tz_(), "yyyy-MM-dd'T'HH:mm:ssXXX");
+  return Utilities.formatDate(date, tz_(), "yyyy-MM-dd'T'HH:mm:ss");
 }
 
 function fmt_(date, pattern) {
@@ -69,8 +73,9 @@ function fmt_(date, pattern) {
 }
 
 /**
- * Parses a date or date-time string. Strings without an offset are read in the script time zone.
- * Accepts: 2026-11-05 | 2026-11-05T13:00 | 2026-11-05T13:00:00 | 2026-11-05T13:00:00-05:00 | ...Z
+ * Parses a date or date-time string. Strings without an offset (the normal case) are read in the
+ * script time zone. An explicit offset is honored, for times the owner gives in another time zone.
+ * Accepts: 2026-11-05 | 2026-11-05T13:00 | 2026-11-05T13:00:00 | 2026-11-05T13:00:00+01:00 | ...Z
  */
 function parseWhen_(value) {
   const s = String(value || '').trim();
@@ -85,7 +90,7 @@ function parseWhen_(value) {
   if (m) {
     return Utilities.parseDate(m[1] + ' ' + m[2] + ':' + m[3] + ':' + (m[4] || '00'), tz_(), 'yyyy-MM-dd HH:mm:ss');
   }
-  throw new Error('Unrecognized date or time: "' + s + '". Use ISO 8601, e.g. 2026-11-05T13:00:00.');
+  throw new Error('Unrecognized date or time: "' + s + '". Use local time like 2026-11-05T13:00:00, or 2026-11-05 for a date.');
 }
 
 function isDateOnly_(value) {

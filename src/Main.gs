@@ -109,6 +109,18 @@ function handleCommand_(command, ctx) {
   }
 }
 
+/**
+ * The message the owner is replying to, if any: { who, text }.
+ * In a forum topic, a message that is not an explicit reply points at the topic's creation message; that is skipped.
+ */
+function repliedText_(msg) {
+  const r = msg.reply_to_message;
+  if (!r || r.forum_topic_created) return null;
+  const text = (r.text || r.caption || '').trim();
+  if (!text) return null;
+  return { who: r.from && r.from.is_bot ? 'your earlier message' : 'a message', text: text };
+}
+
 /** Turns a Telegram message into Claude content blocks and runs the agent. */
 function respond_(msg, ctx, text) {
   const blocks = [];
@@ -150,7 +162,13 @@ function respond_(msg, ctx, text) {
 
   const userText = rawText || (blocks.length ? 'The owner sent this without a caption. Work out what they most likely want.' : '');
   if (!userText && !blocks.length) return null; // Stickers and other unsupported messages.
-  blocks.push({ type: 'text', text: (msg.forward_origin ? '(Forwarded message)\n' : '') + userText });
+
+  const quoted = repliedText_(msg);
+  if (quoted) historyText = '(replying to: "' + truncate_(quoted.text, 200) + '") ' + historyText;
+  const context =
+    (msg.forward_origin ? '(Forwarded message)\n' : '') +
+    (quoted ? '(The owner is replying to ' + quoted.who + ': "' + truncate_(quoted.text, 1500) + '")\n' : '');
+  blocks.push({ type: 'text', text: context + userText });
 
   const reply = runAgent_(ctx, blocks, historyText, rawText, isVoice);
   return echo + reply;

@@ -148,7 +148,8 @@ const TOOL_DEFS = [
         text: { type: 'string', description: 'What to remind the owner about, written as the reminder message.' },
         time: {
           type: 'string',
-          description: 'When, ISO 8601 date-time. For a repeating reminder, the first occurrence; later ones keep the same time of day.',
+          description:
+            'When, as local date-time (e.g. 2026-11-05T18:00:00). For a repeating reminder, the first occurrence; later ones keep the same time of day.',
         },
         repeat: {
           type: 'object',
