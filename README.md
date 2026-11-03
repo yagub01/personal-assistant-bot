@@ -7,7 +7,7 @@ A personal Telegram assistant that runs free on Google Apps Script. You write or
 - **Input:** text, voice messages (transcribed by Gemini), photos, and PDFs.
 - **Calendar:** reads all visible calendars, including a subscribed Outlook (Harvard) calendar; creates, moves, and deletes events in Google Calendar.
 - **Tasks:** Google Tasks (which also shows in Keep).
-- **Reminders:** Telegram messages at a set time, posted in the Reminders topic.
+- **Reminders:** Telegram messages at a set time, posted in the Reminders topic. Reminders can repeat daily, weekly on chosen days, or monthly.
 - **Event alerts:** a message about 15 minutes before each timed event.
 - **Morning briefing** (07:30) and **journal prompt** (23:00) in the Briefing topic. Journal entries are saved verbatim to a Google Doc.
 - **Memory:** a shared Google Sheet of lasting facts, plus one notes Doc per topic.

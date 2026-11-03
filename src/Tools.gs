@@ -120,12 +120,30 @@ const TOOL_DEFS = [
   {
     name: 'reminder_create',
     description:
-      'Schedule a Telegram message to the owner at a specific time, posted in the Reminders topic. Use for "remind me at/in...".',
+      'Schedule a Telegram message to the owner at a specific time, posted in the Reminders topic. Use for "remind me at/in..." and for repeating reminders ("every Monday at 9", "every day at 8 pm", "on the 1st of each month").',
     input_schema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'What to remind the owner about, written as the reminder message.' },
-        time: { type: 'string', description: 'When, ISO 8601 date-time.' },
+        time: {
+          type: 'string',
+          description: 'When, ISO 8601 date-time. For a repeating reminder, the first occurrence; later ones keep the same time of day.',
+        },
+        repeat: {
+          type: 'object',
+          description: 'Optional. Omit for a one-time reminder.',
+          properties: {
+            frequency: { type: 'string', enum: ['daily', 'weekly', 'monthly'] },
+            interval: { type: 'integer', description: 'Every N days, weeks, or months. Default 1.' },
+            weekdays: {
+              type: 'array',
+              items: { type: 'string', enum: ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] },
+              description: 'Weekly only. Defaults to the weekday of time. Use MO-FR for weekdays.',
+            },
+            until: { type: 'string', description: 'Optional last date, YYYY-MM-DD.' },
+          },
+          required: ['frequency'],
+        },
       },
       required: ['text', 'time'],
     },
@@ -137,7 +155,7 @@ const TOOL_DEFS = [
   },
   {
     name: 'reminder_cancel',
-    description: 'Cancel a pending reminder by ID.',
+    description: 'Cancel a reminder by ID. For a repeating reminder, this cancels the whole series.',
     input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
   // ----- Memory and notes -----
@@ -325,16 +343,18 @@ const TOOL_IMPLS = {
   // ----- Reminders -----
   reminder_create: function (input) {
     const when = parseWhen_(input.time);
-    if (when.getTime() < Date.now() - 60 * 1000) throw new Error('That time is in the past: ' + isoLocal_(when));
-    const item = addReminder_(input.text, when);
-    return { scheduled: true, id: item.id, time: isoLocal_(when) };
+    if (!input.repeat && when.getTime() < Date.now() - 60 * 1000) {
+      throw new Error('That time is in the past: ' + isoLocal_(when));
+    }
+    const item = addReminder_(input.text, when, input.repeat);
+    return { scheduled: true, id: item.id, next: isoLocal_(new Date(item.at)), repeats: describeRepeat_(item) };
   },
 
   reminders_list: function () {
     const list = loadReminders_();
     if (!list.length) return 'No pending reminders.';
     return list.map(function (r) {
-      return { id: r.id, time: isoLocal_(new Date(r.at)), text: r.text };
+      return { id: r.id, next: isoLocal_(new Date(r.at)), repeats: describeRepeat_(r), text: r.text };
     });
   },
 

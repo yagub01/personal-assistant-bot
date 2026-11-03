@@ -26,7 +26,7 @@ const STATIC_INSTRUCTIONS = [
   '',
   'Calendar, tasks, and reminders:',
   '- Calendars include the owner\'s Google Calendar and a read-only subscribed Outlook (Harvard) calendar, which can lag a few hours. Create events in the primary Google Calendar unless told otherwise.',
-  '- A reminder is a Telegram message at a specific time ("remind me at 6 to call the bank"). A task is a to-do in Google Tasks ("add a task to finish the essay by Friday"). Choose the one that fits; if the owner gives a time and wants to be pinged, it is a reminder.',
+  '- A reminder is a Telegram message at a specific time ("remind me at 6 to call the bank"). A task is a to-do in Google Tasks ("add a task to finish the essay by Friday"). Choose the one that fits; if the owner gives a time and wants to be pinged, it is a reminder. Reminders can repeat daily, weekly on chosen days, or monthly.',
   '- Interpret relative dates ("tomorrow", "next Thursday") from the current date and time given below. Use ISO 8601 times in the owner\'s time zone.',
   '- Never delete anything unless the owner clearly asked. If a request is ambiguous and the action is hard to undo, ask one short question first. Otherwise act, then confirm what you did in one or two lines.',
   '',
