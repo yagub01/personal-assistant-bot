@@ -15,7 +15,7 @@ function setup() {
   const folder = DriveApp.getFolderById(prop_('FOLDER_ID'));
 
   ['Journal', 'Academics Notes', 'Careers Notes', 'General Notes'].forEach(function (name) {
-    const key = 'DOC_' + name.replace(/\s+/g, '_').toUpperCase();
+    const key = docKey_(name);
     if (prop_(key)) return;
     const doc = DocumentApp.create(name);
     doc.getBody().setText(name === 'Journal' ? 'Journal' : name + ' (maintained by the assistant; you can edit this freely)');

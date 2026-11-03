@@ -31,9 +31,16 @@ function memoryText_() {
     .join('\n');
 }
 
+/** Stops Sheets from reading text that starts with =, +, - or @ as a formula. */
+function sheetText_(value) {
+  const s = String(value);
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
 function memorySave_(fact, category) {
-  const id = Utilities.getUuid().slice(0, 8);
-  memorySheet_().appendRow([id, fmt_(new Date(), 'yyyy-MM-dd'), category || 'general', fact]);
+  // The leading letter keeps Sheets from converting an all-digit ID into a number.
+  const id = 'm' + Utilities.getUuid().replace(/-/g, '').slice(0, 7);
+  memorySheet_().appendRow([id, fmt_(new Date(), 'yyyy-MM-dd'), sheetText_(category || 'general'), sheetText_(fact)]);
   return id;
 }
 
@@ -54,8 +61,7 @@ function memoryDelete_(id) {
 // ---------- Topic notes and journal (Google Docs) ----------
 
 function topicDocId_(topic) {
-  const docName = TOPIC_DOCS[topic] || TOPIC_DOCS.General;
-  return requireProp_('DOC_' + docName.replace(/\s+/g, '_').toUpperCase());
+  return requireProp_(docKey_(TOPIC_DOCS[topic] || TOPIC_DOCS.General));
 }
 
 function topicDocUrl_(topic) {
@@ -82,14 +88,31 @@ function appendJournalEntry_(text, isVoice) {
   body.appendParagraph(text);
 }
 
-// ---------- Reminders (Script Properties, JSON list of {id, at, text}) ----------
+// ---------- Reminders (one Script Property per reminder: REM_<id> = {id, at, text, repeat?, time?, anchor?}) ----------
 
-function loadReminders_() {
-  return JSON.parse(prop_('REMINDERS', '[]'));
+const REMINDER_PREFIX = 'REM_';
+
+/** All pending reminders, soonest first. Pass a getProperties() snapshot to avoid another read. */
+function loadReminders_(props) {
+  const all = props || PropertiesService.getScriptProperties().getProperties();
+  return Object.keys(all)
+    .filter(function (key) {
+      return key.indexOf(REMINDER_PREFIX) === 0;
+    })
+    .map(function (key) {
+      return JSON.parse(all[key]);
+    })
+    .sort(function (a, b) {
+      return a.at - b.at;
+    });
 }
 
-function saveReminders_(list) {
-  setProp_('REMINDERS', JSON.stringify(list));
+function saveReminder_(item) {
+  setProp_(REMINDER_PREFIX + item.id, JSON.stringify(item));
+}
+
+function deleteReminder_(id) {
+  PropertiesService.getScriptProperties().deleteProperty(REMINDER_PREFIX + id);
 }
 
 /**
@@ -97,7 +120,7 @@ function saveReminders_(list) {
  * A repeating reminder keeps the same local time of day and is rescheduled each time it fires.
  */
 function addReminder_(text, when, repeat) {
-  const item = { id: Utilities.getUuid().slice(0, 8), at: when.getTime(), text: text };
+  const item = { id: Utilities.getUuid().replace(/-/g, '').slice(0, 8), at: when.getTime(), text: truncate_(text, 1000) };
   if (repeat) {
     item.repeat = normalizeRepeat_(repeat, when);
     item.time = fmt_(when, 'HH:mm');
@@ -107,53 +130,29 @@ function addReminder_(text, when, repeat) {
     if (!first) throw new Error('This repeat rule has no future dates.');
     item.at = first.getTime();
   }
-  return withLock_(function () {
-    const list = loadReminders_();
-    list.push(item);
-    list.sort(function (a, b) {
-      return a.at - b.at;
-    });
-    saveReminders_(list);
-    return item;
-  });
+  saveReminder_(item);
+  return item;
 }
 
 function cancelReminder_(id) {
-  return withLock_(function () {
-    const list = loadReminders_();
-    const kept = list.filter(function (r) {
-      return r.id !== id;
-    });
-    saveReminders_(kept);
-    return kept.length !== list.length;
-  });
+  const key = REMINDER_PREFIX + id;
+  if (prop_(key) === null) return false;
+  PropertiesService.getScriptProperties().deleteProperty(key);
+  return true;
 }
 
-/** Returns every reminder that is due. One-time reminders are removed; repeating ones are rescheduled. */
-function takeDueReminders_() {
-  return withLock_(function () {
-    const now = Date.now();
-    const due = [];
-    const keep = [];
-    loadReminders_().forEach(function (r) {
-      if (r.at > now) {
-        keep.push(r);
-        return;
-      }
-      due.push(r);
-      if (r.repeat) {
-        const next = nextOccurrence_(r, now);
-        if (next) keep.push(Object.assign({}, r, { at: next.getTime() }));
-      }
-    });
-    if (due.length) {
-      keep.sort(function (a, b) {
-        return a.at - b.at;
-      });
-      saveReminders_(keep);
+/** After a reminder is sent (or given up on): reschedule a repeating one, delete a one-time one. */
+function completeReminder_(item, now) {
+  if (item.repeat) {
+    const next = nextOccurrence_(item, now);
+    if (next) {
+      item.at = next.getTime();
+      delete item.failures;
+      saveReminder_(item);
+      return;
     }
-    return due;
-  });
+  }
+  deleteReminder_(item.id);
 }
 
 // ---------- Repeat rules ----------
@@ -247,7 +246,8 @@ function describeRepeat_(item) {
 // ---------- Short-term history (Script Properties, per topic, text only) ----------
 
 const HISTORY_MAX_MESSAGES = 12;
-const HISTORY_MAX_CHARS = 7000; // Script Properties allow about 9 KB per value.
+const HISTORY_MAX_BYTES = 8000; // Script Properties allow about 9 KB (UTF-8 bytes) per value.
+const HISTORY_ENTRY_MAX_CHARS = 1200;
 
 function loadHistory_(topic) {
   return JSON.parse(prop_('HIST_' + topic, '[]'));
@@ -255,7 +255,7 @@ function loadHistory_(topic) {
 
 function saveHistory_(topic, history) {
   let h = history.slice(-HISTORY_MAX_MESSAGES);
-  while (h.length && JSON.stringify(h).length > HISTORY_MAX_CHARS) h = h.slice(2);
+  while (h.length && utf8Length_(JSON.stringify(h)) > HISTORY_MAX_BYTES) h = h.slice(2);
   // The conversation must start with a user message.
   while (h.length && h[0].role !== 'user') h = h.slice(1);
   setProp_('HIST_' + topic, JSON.stringify(h));

@@ -24,13 +24,7 @@ function ok_() {
 
 /** Telegram resends an update if it does not get a timely answer; process each update once. */
 function isDuplicateUpdate_(updateId) {
-  return withLock_(function () {
-    const cache = CacheService.getScriptCache();
-    const key = 'update_' + updateId;
-    if (cache.get(key)) return true;
-    cache.put(key, '1', 21600);
-    return false;
-  });
+  return !claimOnce_('update_' + updateId, 21600);
 }
 
 function handleMessage_(msg) {

@@ -155,13 +155,18 @@ function runAgent_(ctx, userBlocks, historyText, rawText, isVoice) {
   }
   if (!reply) reply = 'I did not manage to finish that. Please try again.';
 
-  saveHistory_(
-    ctx.topic,
-    history.concat([
-      { role: 'user', content: truncate_(historyText, 1500) },
-      { role: 'assistant', content: truncate_(reply, 1500) },
-    ])
-  );
+  // The actions above have already happened, so a failure to save history must not hide the reply.
+  try {
+    saveHistory_(
+      ctx.topic,
+      history.concat([
+        { role: 'user', content: truncate_(historyText, HISTORY_ENTRY_MAX_CHARS) },
+        { role: 'assistant', content: truncate_(reply, HISTORY_ENTRY_MAX_CHARS) },
+      ])
+    );
+  } catch (err) {
+    console.error('Saving history failed: ' + err);
+  }
   return reply;
 }
 

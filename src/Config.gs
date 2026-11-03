@@ -102,3 +102,33 @@ function withLock_(fn) {
     lock.releaseLock();
   }
 }
+
+/** Returns true the first time it is called for a key within the given number of seconds, false afterwards. */
+function claimOnce_(key, seconds) {
+  return withLock_(function () {
+    const cache = CacheService.getScriptCache();
+    if (cache.get(key)) return false;
+    cache.put(key, '1', seconds);
+    return true;
+  });
+}
+
+/** Script Property key holding the ID of a notes document, e.g. "Careers Notes" -> DOC_CAREERS_NOTES. */
+function docKey_(docName) {
+  return 'DOC_' + docName.replace(/\s+/g, '_').toUpperCase();
+}
+
+/** Length of a string in UTF-8 bytes. Script Properties limit each value to about 9 KB of bytes, not characters. */
+function utf8Length_(s) {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      bytes += 4; // Surrogate pair: one 4-byte character.
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}

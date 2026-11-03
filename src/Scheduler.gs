@@ -7,39 +7,95 @@
  */
 
 function tick() {
-  if (!prop_('GROUP_CHAT_ID')) return; // /setup has not been run yet.
+  // One read of all properties per run keeps idle minutes cheap (the daily trigger-runtime quota is limited).
+  const props = PropertiesService.getScriptProperties().getProperties();
+  if (!props.GROUP_CHAT_ID) return; // /setup has not been run yet.
   const now = new Date();
 
-  takeDueReminders_().forEach(function (r) {
-    sendToTopic_('Reminders', 'Reminder: ' + r.text);
+  const anyDue = loadReminders_(props).some(function (r) {
+    return r.at <= now.getTime();
   });
+  if (anyDue) safely_('Reminders', sendDueReminders_);
 
   if (now.getMinutes() % 5 === 0) {
-    try {
+    safely_('Event alerts', function () {
       sendEventAlerts_(now);
-    } catch (err) {
-      console.error('Event alerts failed: ' + err);
-    }
+    });
   }
 
-  runDailyOnce_('BRIEFING', prop_('BRIEFING_TIME'), now, sendBriefing_);
-  runDailyOnce_('JOURNAL', prop_('JOURNAL_TIME'), now, sendJournalPrompt_);
+  safely_('Briefing', function () {
+    runDailyOnce_('BRIEFING', props.BRIEFING_TIME || DEFAULTS.BRIEFING_TIME, props.LAST_BRIEFING, now, sendBriefing_);
+  });
+  safely_('Journal prompt', function () {
+    runDailyOnce_('JOURNAL', props.JOURNAL_TIME || DEFAULTS.JOURNAL_TIME, props.LAST_JOURNAL, now, sendJournalPrompt_);
+  });
 }
 
-/** Runs fn once per day, at or within an hour after the given HH:mm time. */
-function runDailyOnce_(name, hhmm, now, fn) {
-  const parts = String(hhmm).split(':');
-  const target = Number(parts[0]) * 60 + Number(parts[1] || 0);
+/** Runs one part of tick() so that a failure there does not stop the other parts. */
+function safely_(label, fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.error(label + ' failed: ' + (err && err.stack ? err.stack : err));
+  }
+}
+
+const MAX_REMINDER_SEND_ATTEMPTS = 30; // About 30 minutes of retries, one per tick.
+
+/**
+ * Sends every due reminder. A reminder is only completed (deleted, or moved to its next occurrence)
+ * after Telegram accepts it; a failed send is retried on the next tick.
+ * The lock stops overlapping runs from sending the same reminder twice.
+ */
+function sendDueReminders_() {
+  withLock_(function () {
+    const now = Date.now();
+    loadReminders_()
+      .filter(function (r) {
+        return r.at <= now;
+      })
+      .forEach(function (r) {
+        try {
+          sendToTopic_('Reminders', 'Reminder: ' + r.text);
+        } catch (err) {
+          r.failures = (r.failures || 0) + 1;
+          console.error('Reminder ' + r.id + ' send failed (attempt ' + r.failures + '): ' + err);
+          if (r.failures < MAX_REMINDER_SEND_ATTEMPTS) saveReminder_(r);
+          else completeReminder_(r, now);
+          return;
+        }
+        completeReminder_(r, now);
+      });
+  });
+}
+
+/**
+ * Runs fn once per day, at or within an hour after the given HH:mm time.
+ * lastDone is the date this already ran (from the properties snapshot), so most minutes return without a lock.
+ * If fn fails, the day is released again so the next tick retries.
+ */
+function runDailyOnce_(name, hhmm, lastDone, now, fn) {
+  const today = fmt_(now, 'yyyy-MM-dd');
+  if (lastDone === today) return;
+  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) throw new Error(name + '_TIME must be HH:mm, got "' + hhmm + '".');
+  const target = Number(m[1]) * 60 + Number(m[2]);
   const current = Number(fmt_(now, 'H')) * 60 + Number(fmt_(now, 'm'));
   if (current < target || current > target + 60) return;
-  const today = fmt_(now, 'yyyy-MM-dd');
+
   const key = 'LAST_' + name;
   const claimed = withLock_(function () {
     if (prop_(key) === today) return false;
     setProp_(key, today);
     return true;
   });
-  if (claimed) fn();
+  if (!claimed) return;
+  try {
+    fn();
+  } catch (err) {
+    PropertiesService.getScriptProperties().deleteProperty(key);
+    throw err;
+  }
 }
 
 function sendEventAlerts_(now) {
