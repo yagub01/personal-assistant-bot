@@ -5,16 +5,16 @@ A personal Telegram assistant that runs free on Google Apps Script. You write or
 ## What it does
 
 - **Input:** text, voice messages (transcribed by Gemini), photos, and PDFs.
-- **Calendar:** reads all visible calendars, including a subscribed Outlook (Harvard) calendar; creates, moves, and deletes events in Google Calendar.
+- **Calendar:** reads the calendars checked in Google Calendar, including a subscribed Outlook (Harvard) calendar; creates, moves, and deletes events in Google Calendar, one occurrence at a time for recurring events.
 - **Tasks:** Google Tasks (which also shows in Keep).
-- **Reminders:** Telegram messages at a set time, posted in the Reminders topic. Reminders can repeat daily, weekly on chosen days, or monthly.
+- **Reminders:** Telegram messages at a set time, posted in the Reminders topic. Reminders can repeat daily, weekly on chosen days, or monthly. If Telegram is briefly unavailable, the bot keeps retrying for about 30 minutes.
 - **Event alerts:** a message about 15 minutes before each timed event.
 - **Morning briefing** (07:30) and **journal prompt** (23:00) in the Briefing topic. Journal entries are saved verbatim to a Google Doc.
 - **Memory:** a shared Google Sheet of lasting facts, plus one notes Doc per topic.
 - **Drive:** search, read, and create documents.
 - **Web search** for current information.
 
-Topics: **Briefing**, **Academics**, **Careers**, **Reminders**, **General**. The bot can do everything from any topic; the topic tells it the likely context.
+Topics: **Briefing**, **Academics**, **Careers**, **Reminders**, **General**. The bot can do everything from any topic; the topic tells it the likely context. Replying to one of the bot's messages (for example, "move this to 3 pm" on an event alert) gives it that message as context.
 
 Commands: `/new` (fresh conversation in this topic), `/memory`, `/notes`, `/briefing`, `/help`.
 
@@ -43,7 +43,7 @@ Commands: `/new` (fresh conversation in this topic), `/memory`, `/notes`, `/brie
 3. Back in the **Editor**, replace the contents of `appsscript.json` with `src/appsscript.json` from this repository.
 4. For each `.gs` file in `src/`, click **+ > Script**, give it the same name (without `.gs`), and paste its contents. Delete the default `Code.gs`.
 
-Alternatively, with Node.js installed on a computer, use clasp:
+Alternatively, with Node.js and git on a computer, use clasp from the repository folder. First turn on the Apps Script API at script.google.com/home/usersettings, then run:
 
 ```bash
 npm install -g @google/clasp
@@ -57,11 +57,17 @@ clasp login
 clasp create --type standalone --title "Personal Assistant" --rootDir src
 ```
 
+`clasp create` can replace `src/appsscript.json` with a default manifest that lacks the Tasks service and web app settings. Restore the repository's version before pushing:
+
 ```bash
-clasp push
+git checkout -- src/appsscript.json
 ```
 
-(clasp requires turning on the Apps Script API at script.google.com/home/usersettings.)
+```bash
+clasp push --force
+```
+
+`--force` uploads the manifest without asking for confirmation.
 
 ### 4. Add the keys as Script Properties
 
@@ -134,5 +140,5 @@ The time zone is `America/New_York`, set in `appsscript.json`.
 
 - Apps Script stops each run after 6 minutes, so very long requests are cut off.
 - The Outlook calendar is read-only and can lag a few hours.
-- Edits to recurring events may apply to the whole series.
+- For recurring events, the bot changes one occurrence at a time. It can rename a whole series or change its location or description, but changing the time of a whole series must be done in Google Calendar.
 - Short-term conversation history keeps about the last six exchanges per topic; `/new` clears it. Long-term information is kept in the memory Sheet and notes Docs.
