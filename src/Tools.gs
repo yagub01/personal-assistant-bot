@@ -9,12 +9,12 @@ const TOOL_DEFS = [
   {
     name: 'calendar_list_events',
     description:
-      'List events from all of the owner\'s visible calendars (Google Calendar, plus the subscribed Outlook/Harvard calendar) between two times. Use it for questions such as "what do I have tomorrow" or "when am I free".',
+      'List events between two local times from the calendars shown in the owner\'s Google Calendar, including the subscribed Outlook (Harvard) calendar. calendar_id, event_id, and start together identify an event for changes. recurring is true for events in a repeating series. Timed events have start and end; all-day events have start and last_day, both inclusive dates.',
     input_schema: {
       type: 'object',
       properties: {
-        start: { type: 'string', description: 'Range start, ISO 8601 (e.g. 2026-11-05T00:00:00).' },
-        end: { type: 'string', description: 'Range end, ISO 8601.' },
+        start: { type: 'string', description: 'Range start, local date-time, e.g. 2026-11-05T00:00:00.' },
+        end: { type: 'string', description: 'Range end, local date-time.' },
       },
       required: ['start', 'end'],
     },
@@ -27,11 +27,14 @@ const TOOL_DEFS = [
       type: 'object',
       properties: {
         title: { type: 'string' },
-        start: { type: 'string', description: 'ISO 8601 date-time, or YYYY-MM-DD for all-day events.' },
+        start: {
+          type: 'string',
+          description: 'Local date-time, e.g. 2026-11-05T13:00:00, or YYYY-MM-DD for an all-day event.',
+        },
         end: {
           type: 'string',
           description:
-            'ISO 8601 date-time. For all-day events, the last day (YYYY-MM-DD), inclusive. If omitted, timed events last one hour.',
+            'Local date-time. For an all-day event, the last day (YYYY-MM-DD), inclusive. If omitted, a timed event lasts one hour and an all-day event one day.',
         },
         all_day: { type: 'boolean' },
         location: { type: 'string' },
@@ -44,28 +47,46 @@ const TOOL_DEFS = [
   {
     name: 'calendar_update_event',
     description:
-      'Change an existing event. Get calendar_id and event_id from calendar_list_events. For recurring events, the change may apply to the whole series, so confirm with the owner first.',
+      'Change an event. Identify it with calendar_id, event_id, and occurrence_start, copied exactly from calendar_list_events. For a recurring event, only that occurrence changes unless apply_to_series is true; for a whole series, only the title, location, and description can be changed. A YYYY-MM-DD start makes the event all-day; a date-time start makes it timed.',
     input_schema: {
       type: 'object',
       properties: {
         calendar_id: { type: 'string' },
         event_id: { type: 'string' },
+        occurrence_start: { type: 'string', description: 'The event\'s start exactly as calendar_list_events returned it.' },
+        apply_to_series: {
+          type: 'boolean',
+          description: 'Recurring events only: change every occurrence. Use only when the owner clearly means the whole series.',
+        },
         title: { type: 'string' },
-        start: { type: 'string', description: 'New start, ISO 8601. Must be given together with end.' },
-        end: { type: 'string', description: 'New end, ISO 8601.' },
+        start: { type: 'string', description: 'New start: local date-time, or YYYY-MM-DD for all-day.' },
+        end: {
+          type: 'string',
+          description:
+            'New end: local date-time, or the inclusive last day (YYYY-MM-DD) for all-day. If omitted when start changes, the event keeps its length.',
+        },
         location: { type: 'string' },
         description: { type: 'string' },
       },
-      required: ['calendar_id', 'event_id'],
+      required: ['calendar_id', 'event_id', 'occurrence_start'],
     },
   },
   {
     name: 'calendar_delete_event',
-    description: 'Delete an event. Only when the owner has clearly asked for it.',
+    description:
+      'Delete an event, only when the owner has clearly asked. Identify it with calendar_id, event_id, and occurrence_start from calendar_list_events. For a recurring event, only that occurrence is deleted unless apply_to_series is true.',
     input_schema: {
       type: 'object',
-      properties: { calendar_id: { type: 'string' }, event_id: { type: 'string' } },
-      required: ['calendar_id', 'event_id'],
+      properties: {
+        calendar_id: { type: 'string' },
+        event_id: { type: 'string' },
+        occurrence_start: { type: 'string', description: 'The event\'s start exactly as calendar_list_events returned it.' },
+        apply_to_series: {
+          type: 'boolean',
+          description: 'Recurring events only: delete every occurrence. Use only when the owner clearly asked for that.',
+        },
+      },
+      required: ['calendar_id', 'event_id', 'occurrence_start'],
     },
   },
   // ----- Google Tasks -----
@@ -268,43 +289,57 @@ const TOOL_IMPLS = {
     const options = {};
     if (input.location) options.location = input.location;
     if (input.description) options.description = input.description;
-    const allDay = input.all_day || /^\d{4}-\d{2}-\d{2}$/.test(String(input.start).trim());
     let ev;
-    if (allDay) {
-      const startDay = parseWhen_(String(input.start).slice(0, 10));
-      if (input.end) {
-        // Calendar end dates are exclusive, so add one day to the inclusive last day.
-        const lastDay = parseWhen_(String(input.end).slice(0, 10));
-        const endExclusive = new Date(lastDay.getTime() + 24 * 3600 * 1000);
-        ev = cal.createAllDayEvent(input.title, startDay, endExclusive, options);
-      } else {
-        ev = cal.createAllDayEvent(input.title, startDay, options);
-      }
+    if (input.all_day || isDateOnly_(input.start)) {
+      const firstDay = parseWhen_(String(input.start).trim().slice(0, 10));
+      const lastDay = input.end ? parseWhen_(String(input.end).trim().slice(0, 10)) : firstDay;
+      if (lastDay.getTime() < firstDay.getTime()) throw new Error('The last day is before the first day.');
+      // The calendar's end date is exclusive: the day after the last day.
+      ev = cal.createAllDayEvent(input.title, firstDay, nextMidnight_(lastDay), options);
     } else {
       const start = parseWhen_(input.start);
       const end = input.end ? parseWhen_(input.end) : new Date(start.getTime() + 3600 * 1000);
+      if (end.getTime() <= start.getTime()) throw new Error('The end must be after the start.');
       ev = cal.createEvent(input.title, start, end, options);
     }
-    return { created: true, calendar: cal.getName(), calendar_id: cal.getId(), event_id: ev.getId() };
+    return { created: true, calendar: cal.getName(), calendar_id: cal.getId(), event_id: ev.getId(), start: eventStart_(ev) };
   },
 
   calendar_update_event: function (input) {
-    const ev = findEvent_(input.calendar_id, input.event_id);
+    const ev = findOccurrence_(input.calendar_id, input.event_id, input.occurrence_start);
+    const recurring = ev.isRecurringEvent();
+    if (recurring && input.apply_to_series) {
+      if (input.start || input.end) {
+        throw new Error(
+          'The time of a whole recurring series cannot be changed here. Move single occurrences, or change the series in Google Calendar.'
+        );
+      }
+      const series = ev.getEventSeries();
+      if (input.title) series.setTitle(input.title);
+      if (input.location !== undefined) series.setLocation(input.location);
+      if (input.description !== undefined) series.setDescription(input.description);
+      return { updated: 'whole series', title: series.getTitle() };
+    }
     if (input.title) ev.setTitle(input.title);
     if (input.location !== undefined) ev.setLocation(input.location);
     if (input.description !== undefined) ev.setDescription(input.description);
-    if (input.start || input.end) {
-      if (!input.start || !input.end) throw new Error('Give both start and end when changing the time.');
-      ev.setTime(parseWhen_(input.start), parseWhen_(input.end));
-    }
-    return { updated: true, title: ev.getTitle() };
+    if (input.start || input.end) setEventTime_(ev, input.start, input.end);
+    return { updated: recurring ? 'this occurrence only' : 'event', title: ev.getTitle(), start: eventStart_(ev) };
   },
 
   calendar_delete_event: function (input) {
-    const ev = findEvent_(input.calendar_id, input.event_id);
+    const ev = findOccurrence_(input.calendar_id, input.event_id, input.occurrence_start);
     const title = ev.getTitle();
+    if (ev.isRecurringEvent()) {
+      if (input.apply_to_series) {
+        ev.getEventSeries().deleteEventSeries();
+        return { deleted: 'whole series', title: title };
+      }
+      ev.deleteEvent();
+      return { deleted: 'this occurrence only', title: title };
+    }
     ev.deleteEvent();
-    return { deleted: true, title: title };
+    return { deleted: 'event', title: title };
   },
 
   // ----- Google Tasks -----
@@ -442,41 +477,109 @@ const TOOL_IMPLS = {
 
 // ---------- Helpers shared with the scheduler ----------
 
-/** Events from all visible calendars between start and end, sorted by start time. */
+/** Calendars shown in Google Calendar: not hidden from the calendar list, and checked. */
+function visibleCalendars_() {
+  return CalendarApp.getAllCalendars().filter(function (cal) {
+    return !cal.isHidden() && cal.isSelected();
+  });
+}
+
+/** An event's start as listed to Claude: YYYY-MM-DD for all-day events, local date-time otherwise. */
+function eventStart_(ev) {
+  return ev.isAllDayEvent() ? fmt_(ev.getAllDayStartDate(), 'yyyy-MM-dd') : isoLocal_(ev.getStartTime());
+}
+
+/** Inclusive last day of an all-day event. getAllDayEndDate() is the exclusive end, the day after the last day. */
+function allDayLastDay_(ev) {
+  const first = fmt_(ev.getAllDayStartDate(), 'yyyy-MM-dd');
+  const last = ymdFromDayNumber_(dayNumber_(fmt_(ev.getAllDayEndDate(), 'yyyy-MM-dd')) - 1);
+  return last < first ? first : last;
+}
+
+/** Events from the visible calendars between start and end, sorted by start time. */
 function listEvents_(start, end) {
-  const out = [];
-  CalendarApp.getAllCalendars().forEach(function (cal) {
-    if (cal.isHidden()) return;
+  const found = [];
+  visibleCalendars_().forEach(function (cal) {
     cal.getEvents(start, end).forEach(function (ev) {
-      const allDay = ev.isAllDayEvent();
-      out.push({
+      const item = {
         calendar: cal.getName(),
         calendar_id: cal.getId(),
         event_id: ev.getId(),
         title: ev.getTitle(),
-        all_day: allDay,
-        start: allDay ? fmt_(ev.getAllDayStartDate(), 'yyyy-MM-dd') : isoLocal_(ev.getStartTime()),
-        end: allDay ? fmt_(ev.getAllDayEndDate(), 'yyyy-MM-dd') : isoLocal_(ev.getEndTime()),
-        location: ev.getLocation() || undefined,
-        _startMs: ev.getStartTime().getTime(),
-      });
+        all_day: ev.isAllDayEvent(),
+        start: eventStart_(ev),
+      };
+      if (item.all_day) item.last_day = allDayLastDay_(ev);
+      else item.end = isoLocal_(ev.getEndTime());
+      if (ev.isRecurringEvent()) item.recurring = true;
+      if (ev.getLocation()) item.location = ev.getLocation();
+      found.push({ startMs: ev.getStartTime().getTime(), item: item });
     });
   });
-  out.sort(function (a, b) {
-    return a._startMs - b._startMs;
+  found.sort(function (a, b) {
+    return a.startMs - b.startMs;
   });
-  return out.slice(0, 150).map(function (e) {
-    delete e._startMs;
-    return e;
+  return found.slice(0, 150).map(function (f) {
+    return f.item;
   });
 }
 
-function findEvent_(calendarId, eventId) {
+/**
+ * Finds one specific occurrence from its calendar, event ID, and start as listed by calendar_list_events.
+ * getEventById() is not used: for a recurring event it does not return the occurrence the owner means.
+ */
+function findOccurrence_(calendarId, eventId, occurrenceStart) {
   const cal = CalendarApp.getCalendarById(calendarId);
   if (!cal) throw new Error('Calendar not found: ' + calendarId);
-  const ev = cal.getEventById(eventId);
-  if (!ev) throw new Error('Event not found: ' + eventId);
-  return ev;
+  if (!occurrenceStart) throw new Error('occurrence_start is required: copy the event\'s start from calendar_list_events.');
+  const target = String(occurrenceStart).trim();
+  const dateOnly = isDateOnly_(target);
+  const t = parseWhen_(target);
+  const from = dateOnly ? t : new Date(t.getTime() - 60 * 1000);
+  const to = dateOnly ? nextMidnight_(t) : new Date(t.getTime() + 60 * 1000);
+  const matches = cal.getEvents(from, to).filter(function (ev) {
+    if (ev.getId() !== eventId) return false;
+    return dateOnly
+      ? ev.isAllDayEvent() && fmt_(ev.getAllDayStartDate(), 'yyyy-MM-dd') === target
+      : !ev.isAllDayEvent() && Math.abs(ev.getStartTime().getTime() - t.getTime()) < 60 * 1000;
+  });
+  if (!matches.length) {
+    throw new Error('No event with that ID starts at ' + target + '. List the events again and copy the exact start.');
+  }
+  return matches[0];
+}
+
+/**
+ * Moves or resizes an event. A YYYY-MM-DD start makes it all-day (end = inclusive last day);
+ * a date-time start makes it timed. If only start is given, the event keeps its length.
+ */
+function setEventTime_(ev, startStr, endStr) {
+  const toAllDay = startStr ? isDateOnly_(startStr) : ev.isAllDayEvent();
+  if (toAllDay) {
+    const firstDay = startStr ? parseWhen_(String(startStr).trim()) : ev.getAllDayStartDate();
+    let lastDay;
+    if (endStr) {
+      lastDay = parseWhen_(String(endStr).trim().slice(0, 10));
+    } else if (ev.isAllDayEvent()) {
+      const days = dayNumber_(allDayLastDay_(ev)) - dayNumber_(fmt_(ev.getAllDayStartDate(), 'yyyy-MM-dd'));
+      lastDay = addDays_(firstDay, days);
+    } else {
+      lastDay = firstDay;
+    }
+    if (lastDay.getTime() < firstDay.getTime()) throw new Error('The last day is before the first day.');
+    ev.setAllDayDates(firstDay, nextMidnight_(lastDay));
+    return;
+  }
+  const start = startStr ? parseWhen_(startStr) : ev.getStartTime();
+  let end;
+  if (endStr) {
+    end = parseWhen_(endStr);
+  } else {
+    const length = ev.isAllDayEvent() ? 3600 * 1000 : ev.getEndTime().getTime() - ev.getStartTime().getTime();
+    end = new Date(start.getTime() + length);
+  }
+  if (end.getTime() <= start.getTime()) throw new Error('The end must be after the start.');
+  ev.setTime(start, end);
 }
 
 /** Open (or all) tasks across every task list. */

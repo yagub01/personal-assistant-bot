@@ -183,20 +183,6 @@ function normalizeRepeat_(repeat, when) {
   return out;
 }
 
-// Calendar dates are handled as day numbers in UTC, so daylight saving never shifts a date.
-function dayNumber_(ymd) {
-  const p = ymd.split('-').map(Number);
-  return Math.round(Date.UTC(p[0], p[1] - 1, p[2]) / 86400000);
-}
-
-function ymdFromDayNumber_(n) {
-  return new Date(n * 86400000).toISOString().slice(0, 10);
-}
-
-function weekdayOf_(ymd) {
-  return new Date(dayNumber_(ymd) * 86400000).getUTCDay();
-}
-
 function mondayOf_(dayNum) {
   return dayNum - ((weekdayOf_(ymdFromDayNumber_(dayNum)) + 6) % 7);
 }

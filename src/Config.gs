@@ -88,6 +88,34 @@ function parseWhen_(value) {
   throw new Error('Unrecognized date or time: "' + s + '". Use ISO 8601, e.g. 2026-11-05T13:00:00.');
 }
 
+function isDateOnly_(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
+}
+
+// Calendar dates are handled as day numbers in UTC, so daylight saving never shifts a date.
+function dayNumber_(ymd) {
+  const p = ymd.split('-').map(Number);
+  return Math.round(Date.UTC(p[0], p[1] - 1, p[2]) / 86400000);
+}
+
+function ymdFromDayNumber_(n) {
+  return new Date(n * 86400000).toISOString().slice(0, 10);
+}
+
+function weekdayOf_(ymd) {
+  return new Date(dayNumber_(ymd) * 86400000).getUTCDay();
+}
+
+/** Local midnight n days after the date of the given Date (23- and 25-hour days included). */
+function addDays_(date, n) {
+  return parseWhen_(ymdFromDayNumber_(dayNumber_(fmt_(date, 'yyyy-MM-dd')) + n));
+}
+
+/** Local midnight at the start of the following day. */
+function nextMidnight_(date) {
+  return addDays_(date, 1);
+}
+
 function truncate_(text, max) {
   const s = String(text || '');
   return s.length > max ? s.slice(0, max) + '\n[truncated]' : s;

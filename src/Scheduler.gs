@@ -100,21 +100,28 @@ function runDailyOnce_(name, hhmm, lastDone, now, fn) {
 
 function sendEventAlerts_(now) {
   const minutes = Number(prop_('ALERT_MINUTES'));
+  if (!(minutes >= 0)) throw new Error('ALERT_MINUTES must be a number of minutes.');
   // Checks run every 5 minutes, so look 5 minutes past the alert window.
   const until = new Date(now.getTime() + (minutes + 5) * 60 * 1000);
-  const cache = CacheService.getScriptCache();
-  CalendarApp.getAllCalendars().forEach(function (cal) {
-    if (cal.isHidden()) return;
+  visibleCalendars_().forEach(function (cal) {
     cal.getEvents(now, until).forEach(function (ev) {
       if (ev.isAllDayEvent()) return;
       const start = ev.getStartTime();
       if (start.getTime() < now.getTime()) return; // Already started.
-      const key = 'alert_' + Utilities.base64EncodeWebSafe(ev.getId() + '|' + start.getTime()).slice(0, 200);
-      if (cache.get(key)) return;
-      cache.put(key, '1', 21600);
+      // A fixed-length digest keeps the key short for long Outlook event IDs; including the start time
+      // gives each occurrence of a recurring event its own alert.
+      const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, ev.getId() + '|' + start.getTime());
+      const key = 'alert_' + Utilities.base64EncodeWebSafe(digest);
+      if (!claimOnce_(key, 21600)) return;
       const mins = Math.max(1, Math.round((start.getTime() - now.getTime()) / 60000));
       const where = ev.getLocation() ? '\nWhere: ' + ev.getLocation() : '';
-      sendToTopic_('Reminders', 'In ' + mins + ' min (' + fmt_(start, 'HH:mm') + '): ' + ev.getTitle() + where);
+      try {
+        sendToTopic_('Reminders', 'In ' + mins + ' min (' + fmt_(start, 'HH:mm') + '): ' + ev.getTitle() + where);
+      } catch (err) {
+        // Release the claim so the next check (5 minutes later) tries again.
+        CacheService.getScriptCache().remove(key);
+        console.error('Event alert failed: ' + err);
+      }
     });
   });
 }
@@ -176,16 +183,13 @@ function sendJournalPrompt_() {
   sendToTopic_('Briefing', lines.join('\n'));
 }
 
-/** Local midnight of the following day. Robust to 23- and 25-hour daylight-saving days. */
-function nextMidnight_(midnight) {
-  return parseWhen_(fmt_(new Date(midnight.getTime() + 26 * 3600 * 1000), 'yyyy-MM-dd'));
-}
-
 function formatEvents_(events) {
   if (!events.length) return '- No events';
   return events
     .map(function (e) {
-      const time = e.all_day ? 'All day' : e.start.slice(11, 16) + '-' + e.end.slice(11, 16);
+      const time = e.all_day
+        ? 'All day' + (e.last_day && e.last_day !== e.start ? ' (through ' + e.last_day + ')' : '')
+        : e.start.slice(11, 16) + '-' + e.end.slice(11, 16);
       return '- ' + time + ' ' + e.title + (e.location ? ' (' + e.location + ')' : '');
     })
     .join('\n');
